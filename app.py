@@ -1,147 +1,141 @@
 import streamlit as st
-from google import genai
+import pandas as pd
+import folium
+from streamlit_folium import st_folium
 
-# -----------------------------
-# 페이지 설정
-# -----------------------------
 st.set_page_config(
-    page_title="안전 귀가 도우미 챗봇",
+    page_title="Safety Map Explorer",
     page_icon="🛡️",
-    layout="centered"
+    layout="wide"
 )
 
-st.title("🛡️ 안전 귀가 도우미 챗봇")
-st.caption("혼자 귀가하는 사회적 약자를 위한 안전 솔루션 추천 AI")
+st.title("🛡️ Safety Map Explorer")
+st.caption("안전 지역과 위험 지역을 지도에서 확인하세요.")
 
-# -----------------------------
-# API 키 확인
-# -----------------------------
+# 예제 데이터
+data = [
+    {
+        "지역": "서울역",
+        "위도": 37.5547,
+        "경도": 126.9706,
+        "등급": "위험",
+        "설명": "야간 범죄 신고 다수"
+    },
+    {
+        "지역": "광화문",
+        "위도": 37.5759,
+        "경도": 126.9768,
+        "등급": "안전",
+        "설명": "유동인구 많고 치안 우수"
+    },
+    {
+        "지역": "강남역",
+        "위도": 37.4979,
+        "경도": 127.0276,
+        "등급": "주의",
+        "설명": "야간 혼잡 지역"
+    },
+    {
+        "지역": "잠실",
+        "위도": 37.5133,
+        "경도": 127.1002,
+        "등급": "안전",
+        "설명": "주거 및 상업지역"
+    },
+    {
+        "지역": "구로디지털단지",
+        "위도": 37.4850,
+        "경도": 126.9019,
+        "등급": "위험",
+        "설명": "야간 신고 증가 지역"
+    },
+    {
+        "지역": "홍대입구",
+        "위도": 37.5572,
+        "경도": 126.9254,
+        "등급": "주의",
+        "설명": "심야 혼잡 지역"
+    }
+]
+
+df = pd.DataFrame(data)
+
+st.sidebar.header("필터")
+
+risk_filter = st.sidebar.selectbox(
+    "위험도 선택",
+    ["전체", "안전", "주의", "위험"]
+)
+
+if risk_filter != "전체":
+    filtered_df = df[df["등급"] == risk_filter]
+else:
+    filtered_df = df.copy()
+
+# 통계
+col1, col2, col3, col4 = st.columns(4)
+
+col1.metric("전체", len(df))
+col2.metric("안전", len(df[df["등급"] == "안전"]))
+col3.metric("주의", len(df[df["등급"] == "주의"]))
+col4.metric("위험", len(df[df["등급"] == "위험"]))
+
+# 지도 생성
+map_center = [37.55, 126.99]
+
+m = folium.Map(
+    location=map_center,
+    zoom_start=11
+)
+
+for _, row in filtered_df.iterrows():
+
+    color_map = {
+        "안전": "green",
+        "주의": "orange",
+        "위험": "red"
+    }
+
+    folium.Marker(
+        location=[row["위도"], row["경도"]],
+        popup=f"""
+        <b>{row['지역']}</b><br>
+        위험도: {row['등급']}<br>
+        설명: {row['설명']}
+        """,
+        tooltip=row["지역"],
+        icon=folium.Icon(
+            color=color_map.get(row["등급"], "blue")
+        )
+    ).add_to(m)
+
+st.subheader("📍 안전 지도")
+
 try:
-    api_key = st.secrets["GEMINI_API_KEY"]
-except Exception:
-    st.error(
-        "GEMINI_API_KEY가 설정되지 않았습니다.\n\n"
-        "Streamlit Secrets에 API 키를 추가해주세요."
+    st_folium(
+        m,
+        width=None,
+        height=500
     )
-    st.stop()
+except Exception as e:
+    st.error(f"지도 표시 오류: {e}")
 
-# Gemini 클라이언트 생성
-client = genai.Client(api_key=api_key)
+st.subheader("📊 지역 데이터")
 
-# -----------------------------
-# 시스템 프롬프트
-# -----------------------------
-SYSTEM_PROMPT = """
-당신은 '안전 귀가 도우미 AI'입니다.
-
-목적:
-혼자 귀가하는 사회적 약자(여성, 아동, 노인, 장애인 등)의
-안전 문제를 해결하기 위한 실질적인 방법을 제안합니다.
-
-답변 원칙:
-1. 현실적인 안전 수칙을 제시한다.
-2. 스마트폰 앱, 위치 공유, 안심 귀가 서비스 등을 추천할 수 있다.
-3. 긴급 상황에서는 경찰(112) 또는 응급기관 이용을 안내한다.
-4. 위험한 행동을 권장하지 않는다.
-5. 답변은 친절하고 이해하기 쉽게 작성한다.
-6. 한국 상황을 기준으로 설명한다.
-"""
-
-# -----------------------------
-# 채팅 기록 초기화
-# -----------------------------
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# 기존 대화 표시
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-
-# -----------------------------
-# 사용자 입력
-# -----------------------------
-user_input = st.chat_input(
-    "귀가 안전에 대해 질문해보세요."
+st.dataframe(
+    filtered_df,
+    use_container_width=True
 )
 
-if user_input:
+csv = filtered_df.to_csv(index=False).encode("utf-8-sig")
 
-    # 사용자 메시지 저장
-    st.session_state.messages.append(
-        {
-            "role": "user",
-            "content": user_input
-        }
-    )
+st.download_button(
+    "📥 CSV 다운로드",
+    data=csv,
+    file_name="safety_map_data.csv",
+    mime="text/csv"
+)
 
-    with st.chat_message("user"):
-        st.markdown(user_input)
-
-    try:
-
-        # Gemini용 대화 이력 생성
-        conversation = SYSTEM_PROMPT + "\n\n"
-
-        for msg in st.session_state.messages:
-            role = "사용자" if msg["role"] == "user" else "AI"
-            conversation += f"{role}: {msg['content']}\n"
-
-        with st.chat_message("assistant"):
-
-            with st.spinner("답변 생성 중..."):
-
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash-lite",
-                    contents=conversation
-                )
-
-                answer = response.text
-
-                st.markdown(answer)
-
-        # 답변 저장
-        st.session_state.messages.append(
-            {
-                "role": "assistant",
-                "content": answer
-            }
-        )
-
-    except Exception as e:
-
-        error_msg = f"""
-죄송합니다. 답변 생성 중 오류가 발생했습니다.
-
-오류 내용:
-`{str(e)}`
-"""
-
-        with st.chat_message("assistant"):
-            st.error(error_msg)
-
-        st.session_state.messages.append(
-            {
-                "role": "assistant",
-                "content": error_msg
-            }
-        )
-
-# -----------------------------
-# 사이드바
-# -----------------------------
-with st.sidebar:
-
-    st.header("📌 예시 질문")
-
-    st.write("""
-- 밤길이 무서운데 어떻게 귀가하면 좋을까?
-- 여성 안심 귀가 서비스가 있나요?
-- 노인이 혼자 귀가할 때 주의사항은?
-- 위치 공유 앱 추천해줘.
-- 위험 상황이면 어떻게 대처해야 하나요?
-""")
-
-    if st.button("대화 초기화"):
-        st.session_state.messages = []
-        st.rerun()
+st.info(
+    "예제 데이터 기반 데모 앱입니다. 실제 공공데이터로 교체하여 활용할 수 있습니다."
+)
