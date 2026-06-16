@@ -1,2 +1,6 @@
 streamlit
-google-genai
+pandas
+folium
+streamlit-folium
+geopy
+requests
