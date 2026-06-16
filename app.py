@@ -3,262 +3,283 @@ import pandas as pd
 import folium
 from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderServiceError
+from geopy.distance import geodesic
 import requests
 
 st.set_page_config(
-    page_title="Safe Zone Map",
-    page_icon="🛡️",
-    layout="wide"
+page_title="Safe Radius Map",
+page_icon="🛡️",
+layout="wide"
 )
 
-st.title("🛡️ Safe Zone Map")
-st.caption("주변 안전구역(경찰서·소방서)과 위험구역을 지도에서 확인하세요.")
+st.title("🛡️ Safe Radius Map")
+st.caption("반경 1km 내 경찰서·소방서를 확인하여 주변 안전도를 파악합니다.")
 
-# ----------------------------
-# 위험구역 세션 상태
-# ----------------------------
-if "danger_zones" not in st.session_state:
-    st.session_state.danger_zones = []
+# --------------------------------
 
-# ----------------------------
-# 지역 검색
-# ----------------------------
-st.sidebar.header("📍 지역 검색")
-
-location_name = st.sidebar.text_input(
-    "지역 입력",
-    value="Cheonan, South Korea"
-)
-
-# ----------------------------
-# 좌표 변환
-# ----------------------------
-@st.cache_data(show_spinner=False)
-def geocode_location(place):
-    try:
-        geolocator = Nominatim(user_agent="safe_zone_map")
-        location = geolocator.geocode(place, timeout=10)
-
-        if location:
-            return location.latitude, location.longitude
-
-        return None
-
-    except GeocoderServiceError:
-        return None
-    except Exception:
-        return None
-
-
-# ----------------------------
-# Overpass API
-# ----------------------------
-@st.cache_data(ttl=3600)
-def get_safe_places(lat, lon):
-    query = f"""
-    [out:json];
-    (
-      node["amenity"="police"](around:5000,{lat},{lon});
-      node["amenity"="fire_station"](around:5000,{lat},{lon});
-    );
-    out;
-    """
-
-    url = "https://overpass-api.de/api/interpreter"
-
-    try:
-        response = requests.get(
-            url,
-            params={"data": query},
-            timeout=20
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        places = []
-
-        for item in data.get("elements", []):
-
-            amenity = item.get("tags", {}).get("amenity", "")
-            name = item.get("tags", {}).get("name", "이름 없음")
-
-            places.append(
-                {
-                    "name": name,
-                    "type": amenity,
-                    "lat": item["lat"],
-                    "lon": item["lon"],
-                }
-            )
-
-        return places
-
-    except Exception:
-        return []
-
-
-# ----------------------------
 # 위치 검색
-# ----------------------------
-coords = geocode_location(location_name)
+
+# --------------------------------
+
+location_name = st.text_input(
+"지역 검색",
+"Cheonan, South Korea"
+)
+
+# --------------------------------
+
+# 주소 → 좌표
+
+# --------------------------------
+
+@st.cache_data
+def geocode(place):
+try:
+geo = Nominatim(user_agent="safe_radius_map")
+loc = geo.geocode(place, timeout=10)
+
+```
+    if loc:
+        return loc.latitude, loc.longitude
+
+    return None
+
+except:
+    return None
+```
+
+# --------------------------------
+
+# Overpass API
+
+# --------------------------------
+
+@st.cache_data(ttl=3600)
+def get_safety_places(lat, lon):
+
+```
+query = f"""
+[out:json];
+(
+  node["amenity"="police"](around:1000,{lat},{lon});
+  node["amenity"="fire_station"](around:1000,{lat},{lon});
+);
+out;
+"""
+
+try:
+
+    response = requests.get(
+        "https://overpass-api.de/api/interpreter",
+        params={"data": query},
+        timeout=20
+    )
+
+    data = response.json()
+
+    result = []
+
+    for item in data.get("elements", []):
+
+        result.append({
+            "name": item.get("tags", {}).get("name", "이름 없음"),
+            "type": item.get("tags", {}).get("amenity"),
+            "lat": item["lat"],
+            "lon": item["lon"]
+        })
+
+    return result
+
+except:
+    return []
+```
+
+coords = geocode(location_name)
 
 if not coords:
-    st.error("지역을 찾을 수 없습니다.")
-    st.stop()
+st.error("위치를 찾을 수 없습니다.")
+st.stop()
 
 lat, lon = coords
 
-# ----------------------------
-# 위험구역 등록
-# ----------------------------
-st.sidebar.header("⚠️ 위험구역 추가")
+places = get_safety_places(lat, lon)
 
-danger_name = st.sidebar.text_input(
-    "위험구역 이름",
-    placeholder="어두운 골목"
-)
+police = [x for x in places if x["type"] == "police"]
+fire = [x for x in places if x["type"] == "fire_station"]
 
-if st.sidebar.button("위험구역 등록"):
+# --------------------------------
 
-    st.session_state.danger_zones.append(
-        {
-            "name": danger_name if danger_name else "위험 신고 지점",
-            "lat": lat,
-            "lon": lon,
-        }
-    )
+# 거리 계산
 
-    st.sidebar.success("등록 완료")
+# --------------------------------
 
-# ----------------------------
-# 안전구역 조회
-# ----------------------------
-with st.spinner("안전구역 검색 중..."):
-    safe_places = get_safe_places(lat, lon)
+def nearest_distance(items):
 
-# ----------------------------
+```
+if not items:
+    return None
+
+distances = []
+
+for item in items:
+
+    d = geodesic(
+        (lat, lon),
+        (item["lat"], item["lon"])
+    ).meters
+
+    distances.append(d)
+
+return min(distances)
+```
+
+nearest_police = nearest_distance(police)
+nearest_fire = nearest_distance(fire)
+
+facility_count = len(police) + len(fire)
+
+# --------------------------------
+
+# 안전등급
+
+# --------------------------------
+
+if facility_count >= 10:
+grade = "매우 안전 🟢"
+
+elif facility_count >= 5:
+grade = "안전 🟢"
+
+elif facility_count >= 2:
+grade = "보통 🟡"
+
+else:
+grade = "주의 🔴"
+
+# --------------------------------
+
 # 통계
-# ----------------------------
-police_count = len(
-    [x for x in safe_places if x["type"] == "police"]
+
+# --------------------------------
+
+c1, c2, c3, c4 = st.columns(4)
+
+c1.metric("👮 경찰서", len(police))
+c2.metric("🚒 소방서", len(fire))
+c3.metric("🏆 안전등급", grade)
+
+if nearest_police:
+c4.metric(
+"가장 가까운 경찰서",
+f"{nearest_police:.0f}m"
+)
+else:
+c4.metric(
+"가장 가까운 경찰서",
+"-"
 )
 
-fire_count = len(
-    [x for x in safe_places if x["type"] == "fire_station"]
-)
+# --------------------------------
 
-danger_count = len(st.session_state.danger_zones)
+# 지도
 
-score = max(
-    0,
-    min(
-        100,
-        50 + (police_count * 5) + (fire_count * 5) - (danger_count * 10)
-    )
-)
+# --------------------------------
 
-col1, col2, col3, col4 = st.columns(4)
-
-col1.metric("👮 경찰서", police_count)
-col2.metric("🚒 소방서", fire_count)
-col3.metric("⚠️ 위험구역", danger_count)
-col4.metric("🛡️ 안전도", f"{score}/100")
-
-# ----------------------------
-# 지도 생성
-# ----------------------------
 m = folium.Map(
-    location=[lat, lon],
-    zoom_start=14
+location=[lat, lon],
+zoom_start=15
 )
 
 # 현재 위치
+
 folium.Marker(
-    [lat, lon],
-    tooltip="검색 위치",
-    icon=folium.Icon(color="blue", icon="info-sign")
+[lat, lon],
+tooltip="검색 위치",
+icon=folium.Icon(color="blue")
+).add_to(m)
+
+# 반경 1km
+
+folium.Circle(
+location=[lat, lon],
+radius=1000,
+color="blue",
+fill=False
 ).add_to(m)
 
 # 경찰서
-for place in safe_places:
 
-    if place["type"] == "police":
+for p in police:
 
-        folium.Marker(
-            [place["lat"], place["lon"]],
-            tooltip=place["name"],
-            popup=f"👮 {place['name']}",
-            icon=folium.Icon(color="green")
-        ).add_to(m)
+```
+distance = geodesic(
+    (lat, lon),
+    (p["lat"], p["lon"])
+).meters
+
+folium.Marker(
+    [p["lat"], p["lon"]],
+    tooltip=f"{p['name']} ({distance:.0f}m)",
+    icon=folium.Icon(color="green")
+).add_to(m)
+```
 
 # 소방서
-for place in safe_places:
 
-    if place["type"] == "fire_station":
+for f in fire:
 
-        folium.Marker(
-            [place["lat"], place["lon"]],
-            tooltip=place["name"],
-            popup=f"🚒 {place['name']}",
-            icon=folium.Icon(color="orange")
-        ).add_to(m)
+```
+distance = geodesic(
+    (lat, lon),
+    (f["lat"], f["lon"])
+).meters
 
-# 위험구역
-for danger in st.session_state.danger_zones:
-
-    folium.CircleMarker(
-        location=[danger["lat"], danger["lon"]],
-        radius=10,
-        color="red",
-        fill=True,
-        fill_color="red",
-        popup=f"⚠️ {danger['name']}"
-    ).add_to(m)
+folium.Marker(
+    [f["lat"], f["lon"]],
+    tooltip=f"{f['name']} ({distance:.0f}m)",
+    icon=folium.Icon(color="orange")
+).add_to(m)
+```
 
 st_folium(
-    m,
-    width=None,
-    height=650
+m,
+width=None,
+height=650
 )
 
-# ----------------------------
-# 상세 목록
-# ----------------------------
-st.subheader("📋 안전구역 목록")
+# --------------------------------
 
-if safe_places:
+# 목록
 
-    df = pd.DataFrame(safe_places)
+# --------------------------------
 
-    df["type"] = df["type"].replace(
-        {
-            "police": "경찰서",
-            "fire_station": "소방서"
-        }
-    )
+st.subheader("📋 반경 1km 내 안전시설")
 
-    st.dataframe(
-        df[["name", "type"]],
-        use_container_width=True
-    )
+if places:
 
-else:
-    st.warning("검색된 안전구역이 없습니다.")
+```
+rows = []
 
-# ----------------------------
-# 위험구역 목록
-# ----------------------------
-st.subheader("⚠️ 위험구역 목록")
+for p in places:
 
-if st.session_state.danger_zones:
+    d = geodesic(
+        (lat, lon),
+        (p["lat"], p["lon"])
+    ).meters
 
-    st.dataframe(
-        pd.DataFrame(st.session_state.danger_zones)[["name"]],
-        use_container_width=True
-    )
+    rows.append({
+        "시설명": p["name"],
+        "종류": "경찰서" if p["type"] == "police" else "소방서",
+        "거리(m)": round(d)
+    })
+
+df = pd.DataFrame(rows)
+
+st.dataframe(
+    df.sort_values("거리(m)"),
+    use_container_width=True
+)
+```
 
 else:
-    st.info("등록된 위험구역이 없습니다.")
+st.warning("반경 1km 내 안전시설이 없습니다.")
