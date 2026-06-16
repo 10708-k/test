@@ -2,110 +2,16 @@ import streamlit as st
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
-from geopy.geocoders import Nominatim
-from geopy.distance import geodesic
-import requests
+from math import radians, sin, cos, sqrt, atan2
 
 st.set_page_config(
-page_title="Safe Radius Map",
+page_title="안전구역 지도",
 page_icon="🛡️",
 layout="wide"
 )
 
-st.title("🛡️ Safe Radius Map")
-st.caption("반경 1km 내 경찰서·소방서를 확인하여 주변 안전도를 파악합니다.")
-
-# --------------------------------
-
-# 위치 검색
-
-# --------------------------------
-
-location_name = st.text_input(
-"지역 검색",
-"Cheonan, South Korea"
-)
-
-# --------------------------------
-
-# 주소 → 좌표
-
-# --------------------------------
-
-@st.cache_data
-def geocode(place):
-try:
-geo = Nominatim(user_agent="safe_radius_map")
-loc = geo.geocode(place, timeout=10)
-
-```
-    if loc:
-        return loc.latitude, loc.longitude
-
-    return None
-
-except:
-    return None
-```
-
-# --------------------------------
-
-# Overpass API
-
-# --------------------------------
-
-@st.cache_data(ttl=3600)
-def get_safety_places(lat, lon):
-
-```
-query = f"""
-[out:json];
-(
-  node["amenity"="police"](around:1000,{lat},{lon});
-  node["amenity"="fire_station"](around:1000,{lat},{lon});
-);
-out;
-"""
-
-try:
-
-    response = requests.get(
-        "https://overpass-api.de/api/interpreter",
-        params={"data": query},
-        timeout=20
-    )
-
-    data = response.json()
-
-    result = []
-
-    for item in data.get("elements", []):
-
-        result.append({
-            "name": item.get("tags", {}).get("name", "이름 없음"),
-            "type": item.get("tags", {}).get("amenity"),
-            "lat": item["lat"],
-            "lon": item["lon"]
-        })
-
-    return result
-
-except:
-    return []
-```
-
-coords = geocode(location_name)
-
-if not coords:
-st.error("위치를 찾을 수 없습니다.")
-st.stop()
-
-lat, lon = coords
-
-places = get_safety_places(lat, lon)
-
-police = [x for x in places if x["type"] == "police"]
-fire = [x for x in places if x["type"] == "fire_station"]
+st.title("🛡️ 안전구역 지도")
+st.caption("반경 1km 내 경찰서·소방서 기반 안전도 분석")
 
 # --------------------------------
 
@@ -113,30 +19,129 @@ fire = [x for x in places if x["type"] == "fire_station"]
 
 # --------------------------------
 
-def nearest_distance(items):
+def distance_m(lat1, lon1, lat2, lon2):
 
 ```
-if not items:
-    return None
+R = 6371000
+
+dlat = radians(lat2 - lat1)
+dlon = radians(lon2 - lon1)
+
+a = (
+    sin(dlat / 2) ** 2
+    + cos(radians(lat1))
+    * cos(radians(lat2))
+    * sin(dlon / 2) ** 2
+)
+
+c = 2 * atan2(sqrt(a), sqrt(1 - a))
+
+return R * c
+```
+
+# --------------------------------
+
+# 도시 데이터
+
+# --------------------------------
+
+cities = {
+"서울": (37.5665, 126.9780),
+"부산": (35.1796, 129.0756),
+"대구": (35.8714, 128.6014),
+"인천": (37.4563, 126.7052),
+"대전": (36.3504, 127.3845),
+"광주": (35.1595, 126.8526),
+"울산": (35.5384, 129.3114),
+"천안": (36.8151, 127.1139)
+}
+
+# --------------------------------
+
+# 경찰서 / 소방서 샘플 데이터
+
+# --------------------------------
+
+facilities = pd.DataFrame([
+
+```
+["서울중부경찰서","경찰서",37.5636,126.9890],
+["서울남대문경찰서","경찰서",37.5585,126.9772],
+["서울종로소방서","소방서",37.5734,126.9790],
+
+["부산중부경찰서","경찰서",35.1068,129.0325],
+["부산동부소방서","소방서",35.1373,129.0930],
+
+["대구중부경찰서","경찰서",35.8694,128.5932],
+["대구중부소방서","소방서",35.8712,128.5961],
+
+["인천중부경찰서","경찰서",37.4734,126.6212],
+["인천중부소방서","소방서",37.4701,126.6333],
+
+["대전중부경찰서","경찰서",36.3286,127.4238],
+["대전중부소방서","소방서",36.3270,127.4214],
+
+["광주동부경찰서","경찰서",35.1464,126.9236],
+["광주소방안전본부","소방서",35.1608,126.8805],
+
+["울산중부경찰서","경찰서",35.5570,129.3208],
+["울산중부소방서","소방서",35.5532,129.3191],
+
+["천안동남경찰서","경찰서",36.8064,127.1522],
+["천안서북소방서","소방서",36.8288,127.1227]
+```
+
+], columns=["이름","종류","위도","경도"])
+
+# --------------------------------
+
+# 도시 선택
+
+# --------------------------------
+
+city = st.sidebar.selectbox(
+"도시 선택",
+list(cities.keys())
+)
+
+base_lat, base_lon = cities[city]
+
+# --------------------------------
+
+# 거리 계산
+
+# --------------------------------
 
 distances = []
 
-for item in items:
+for _, row in facilities.iterrows():
 
-    d = geodesic(
-        (lat, lon),
-        (item["lat"], item["lon"])
-    ).meters
+```
+d = distance_m(
+    base_lat,
+    base_lon,
+    row["위도"],
+    row["경도"]
+)
 
-    distances.append(d)
-
-return min(distances)
+distances.append(d)
 ```
 
-nearest_police = nearest_distance(police)
-nearest_fire = nearest_distance(fire)
+facilities["거리"] = distances
 
-facility_count = len(police) + len(fire)
+near = facilities[
+facilities["거리"] <= 1000
+]
+
+police_count = len(
+near[near["종류"]=="경찰서"]
+)
+
+fire_count = len(
+near[near["종류"]=="소방서"]
+)
+
+total = len(near)
 
 # --------------------------------
 
@@ -144,15 +149,12 @@ facility_count = len(police) + len(fire)
 
 # --------------------------------
 
-if facility_count >= 10:
+if total >= 5:
 grade = "매우 안전 🟢"
-
-elif facility_count >= 5:
+elif total >= 3:
 grade = "안전 🟢"
-
-elif facility_count >= 2:
+elif total >= 1:
 grade = "보통 🟡"
-
 else:
 grade = "주의 🔴"
 
@@ -162,22 +164,12 @@ grade = "주의 🔴"
 
 # --------------------------------
 
-c1, c2, c3, c4 = st.columns(4)
+c1,c2,c3,c4 = st.columns(4)
 
-c1.metric("👮 경찰서", len(police))
-c2.metric("🚒 소방서", len(fire))
-c3.metric("🏆 안전등급", grade)
-
-if nearest_police:
-c4.metric(
-"가장 가까운 경찰서",
-f"{nearest_police:.0f}m"
-)
-else:
-c4.metric(
-"가장 가까운 경찰서",
-"-"
-)
+c1.metric("👮 경찰서", police_count)
+c2.metric("🚒 소방서", fire_count)
+c3.metric("🏢 안전시설", total)
+c4.metric("🏆 안전등급", grade)
 
 # --------------------------------
 
@@ -186,100 +178,58 @@ c4.metric(
 # --------------------------------
 
 m = folium.Map(
-location=[lat, lon],
-zoom_start=15
+location=[base_lat, base_lon],
+zoom_start=14
 )
 
-# 현재 위치
-
 folium.Marker(
-[lat, lon],
-tooltip="검색 위치",
+[base_lat, base_lon],
+tooltip=f"{city} 중심",
 icon=folium.Icon(color="blue")
 ).add_to(m)
 
-# 반경 1km
-
 folium.Circle(
-location=[lat, lon],
+location=[base_lat, base_lon],
 radius=1000,
 color="blue",
 fill=False
 ).add_to(m)
 
-# 경찰서
-
-for p in police:
+for _, row in near.iterrows():
 
 ```
-distance = geodesic(
-    (lat, lon),
-    (p["lat"], p["lon"])
-).meters
+color = "green"
+
+if row["종류"] == "소방서":
+    color = "orange"
 
 folium.Marker(
-    [p["lat"], p["lon"]],
-    tooltip=f"{p['name']} ({distance:.0f}m)",
-    icon=folium.Icon(color="green")
-).add_to(m)
-```
-
-# 소방서
-
-for f in fire:
-
-```
-distance = geodesic(
-    (lat, lon),
-    (f["lat"], f["lon"])
-).meters
-
-folium.Marker(
-    [f["lat"], f["lon"]],
-    tooltip=f"{f['name']} ({distance:.0f}m)",
-    icon=folium.Icon(color="orange")
+    [row["위도"], row["경도"]],
+    tooltip=f"{row['이름']} ({row['거리']:.0f}m)",
+    icon=folium.Icon(color=color)
 ).add_to(m)
 ```
 
 st_folium(
 m,
 width=None,
-height=650
+height=600
 )
 
-# --------------------------------
+st.subheader("📋 반경 1km 내 시설")
 
-# 목록
-
-# --------------------------------
-
-st.subheader("📋 반경 1km 내 안전시설")
-
-if places:
+if len(near) > 0:
 
 ```
-rows = []
-
-for p in places:
-
-    d = geodesic(
-        (lat, lon),
-        (p["lat"], p["lon"])
-    ).meters
-
-    rows.append({
-        "시설명": p["name"],
-        "종류": "경찰서" if p["type"] == "police" else "소방서",
-        "거리(m)": round(d)
-    })
-
-df = pd.DataFrame(rows)
-
 st.dataframe(
-    df.sort_values("거리(m)"),
+    near[["이름","종류","거리"]]
+    .sort_values("거리"),
     use_container_width=True
 )
 ```
 
 else:
-st.warning("반경 1km 내 안전시설이 없습니다.")
+
+```
+st.warning("반경 1km 내 시설이 없습니다.")
+```
