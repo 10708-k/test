@@ -2,140 +2,263 @@ import streamlit as st
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderServiceError
+import requests
 
 st.set_page_config(
-    page_title="Safety Map Explorer",
+    page_title="Safe Zone Map",
     page_icon="🛡️",
     layout="wide"
 )
 
-st.title("🛡️ Safety Map Explorer")
-st.caption("안전 지역과 위험 지역을 지도에서 확인하세요.")
+st.title("🛡️ Safe Zone Map")
+st.caption("주변 안전구역(경찰서·소방서)과 위험구역을 지도에서 확인하세요.")
 
-# 예제 데이터
-data = [
-    {
-        "지역": "서울역",
-        "위도": 37.5547,
-        "경도": 126.9706,
-        "등급": "위험",
-        "설명": "야간 범죄 신고 다수"
-    },
-    {
-        "지역": "광화문",
-        "위도": 37.5759,
-        "경도": 126.9768,
-        "등급": "안전",
-        "설명": "유동인구 많고 치안 우수"
-    },
-    {
-        "지역": "강남역",
-        "위도": 37.4979,
-        "경도": 127.0276,
-        "등급": "주의",
-        "설명": "야간 혼잡 지역"
-    },
-    {
-        "지역": "잠실",
-        "위도": 37.5133,
-        "경도": 127.1002,
-        "등급": "안전",
-        "설명": "주거 및 상업지역"
-    },
-    {
-        "지역": "구로디지털단지",
-        "위도": 37.4850,
-        "경도": 126.9019,
-        "등급": "위험",
-        "설명": "야간 신고 증가 지역"
-    },
-    {
-        "지역": "홍대입구",
-        "위도": 37.5572,
-        "경도": 126.9254,
-        "등급": "주의",
-        "설명": "심야 혼잡 지역"
-    }
-]
+# ----------------------------
+# 위험구역 세션 상태
+# ----------------------------
+if "danger_zones" not in st.session_state:
+    st.session_state.danger_zones = []
 
-df = pd.DataFrame(data)
+# ----------------------------
+# 지역 검색
+# ----------------------------
+st.sidebar.header("📍 지역 검색")
 
-st.sidebar.header("필터")
-
-risk_filter = st.sidebar.selectbox(
-    "위험도 선택",
-    ["전체", "안전", "주의", "위험"]
+location_name = st.sidebar.text_input(
+    "지역 입력",
+    value="Cheonan, South Korea"
 )
 
-if risk_filter != "전체":
-    filtered_df = df[df["등급"] == risk_filter]
-else:
-    filtered_df = df.copy()
+# ----------------------------
+# 좌표 변환
+# ----------------------------
+@st.cache_data(show_spinner=False)
+def geocode_location(place):
+    try:
+        geolocator = Nominatim(user_agent="safe_zone_map")
+        location = geolocator.geocode(place, timeout=10)
 
+        if location:
+            return location.latitude, location.longitude
+
+        return None
+
+    except GeocoderServiceError:
+        return None
+    except Exception:
+        return None
+
+
+# ----------------------------
+# Overpass API
+# ----------------------------
+@st.cache_data(ttl=3600)
+def get_safe_places(lat, lon):
+    query = f"""
+    [out:json];
+    (
+      node["amenity"="police"](around:5000,{lat},{lon});
+      node["amenity"="fire_station"](around:5000,{lat},{lon});
+    );
+    out;
+    """
+
+    url = "https://overpass-api.de/api/interpreter"
+
+    try:
+        response = requests.get(
+            url,
+            params={"data": query},
+            timeout=20
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        places = []
+
+        for item in data.get("elements", []):
+
+            amenity = item.get("tags", {}).get("amenity", "")
+            name = item.get("tags", {}).get("name", "이름 없음")
+
+            places.append(
+                {
+                    "name": name,
+                    "type": amenity,
+                    "lat": item["lat"],
+                    "lon": item["lon"],
+                }
+            )
+
+        return places
+
+    except Exception:
+        return []
+
+
+# ----------------------------
+# 위치 검색
+# ----------------------------
+coords = geocode_location(location_name)
+
+if not coords:
+    st.error("지역을 찾을 수 없습니다.")
+    st.stop()
+
+lat, lon = coords
+
+# ----------------------------
+# 위험구역 등록
+# ----------------------------
+st.sidebar.header("⚠️ 위험구역 추가")
+
+danger_name = st.sidebar.text_input(
+    "위험구역 이름",
+    placeholder="어두운 골목"
+)
+
+if st.sidebar.button("위험구역 등록"):
+
+    st.session_state.danger_zones.append(
+        {
+            "name": danger_name if danger_name else "위험 신고 지점",
+            "lat": lat,
+            "lon": lon,
+        }
+    )
+
+    st.sidebar.success("등록 완료")
+
+# ----------------------------
+# 안전구역 조회
+# ----------------------------
+with st.spinner("안전구역 검색 중..."):
+    safe_places = get_safe_places(lat, lon)
+
+# ----------------------------
 # 통계
+# ----------------------------
+police_count = len(
+    [x for x in safe_places if x["type"] == "police"]
+)
+
+fire_count = len(
+    [x for x in safe_places if x["type"] == "fire_station"]
+)
+
+danger_count = len(st.session_state.danger_zones)
+
+score = max(
+    0,
+    min(
+        100,
+        50 + (police_count * 5) + (fire_count * 5) - (danger_count * 10)
+    )
+)
+
 col1, col2, col3, col4 = st.columns(4)
 
-col1.metric("전체", len(df))
-col2.metric("안전", len(df[df["등급"] == "안전"]))
-col3.metric("주의", len(df[df["등급"] == "주의"]))
-col4.metric("위험", len(df[df["등급"] == "위험"]))
+col1.metric("👮 경찰서", police_count)
+col2.metric("🚒 소방서", fire_count)
+col3.metric("⚠️ 위험구역", danger_count)
+col4.metric("🛡️ 안전도", f"{score}/100")
 
+# ----------------------------
 # 지도 생성
-map_center = [37.55, 126.99]
-
+# ----------------------------
 m = folium.Map(
-    location=map_center,
-    zoom_start=11
+    location=[lat, lon],
+    zoom_start=14
 )
 
-for _, row in filtered_df.iterrows():
+# 현재 위치
+folium.Marker(
+    [lat, lon],
+    tooltip="검색 위치",
+    icon=folium.Icon(color="blue", icon="info-sign")
+).add_to(m)
 
-    color_map = {
-        "안전": "green",
-        "주의": "orange",
-        "위험": "red"
-    }
+# 경찰서
+for place in safe_places:
 
-    folium.Marker(
-        location=[row["위도"], row["경도"]],
-        popup=f"""
-        <b>{row['지역']}</b><br>
-        위험도: {row['등급']}<br>
-        설명: {row['설명']}
-        """,
-        tooltip=row["지역"],
-        icon=folium.Icon(
-            color=color_map.get(row["등급"], "blue")
-        )
+    if place["type"] == "police":
+
+        folium.Marker(
+            [place["lat"], place["lon"]],
+            tooltip=place["name"],
+            popup=f"👮 {place['name']}",
+            icon=folium.Icon(color="green")
+        ).add_to(m)
+
+# 소방서
+for place in safe_places:
+
+    if place["type"] == "fire_station":
+
+        folium.Marker(
+            [place["lat"], place["lon"]],
+            tooltip=place["name"],
+            popup=f"🚒 {place['name']}",
+            icon=folium.Icon(color="orange")
+        ).add_to(m)
+
+# 위험구역
+for danger in st.session_state.danger_zones:
+
+    folium.CircleMarker(
+        location=[danger["lat"], danger["lon"]],
+        radius=10,
+        color="red",
+        fill=True,
+        fill_color="red",
+        popup=f"⚠️ {danger['name']}"
     ).add_to(m)
 
-st.subheader("📍 안전 지도")
+st_folium(
+    m,
+    width=None,
+    height=650
+)
 
-try:
-    st_folium(
-        m,
-        width=None,
-        height=500
+# ----------------------------
+# 상세 목록
+# ----------------------------
+st.subheader("📋 안전구역 목록")
+
+if safe_places:
+
+    df = pd.DataFrame(safe_places)
+
+    df["type"] = df["type"].replace(
+        {
+            "police": "경찰서",
+            "fire_station": "소방서"
+        }
     )
-except Exception as e:
-    st.error(f"지도 표시 오류: {e}")
 
-st.subheader("📊 지역 데이터")
+    st.dataframe(
+        df[["name", "type"]],
+        use_container_width=True
+    )
 
-st.dataframe(
-    filtered_df,
-    use_container_width=True
-)
+else:
+    st.warning("검색된 안전구역이 없습니다.")
 
-csv = filtered_df.to_csv(index=False).encode("utf-8-sig")
+# ----------------------------
+# 위험구역 목록
+# ----------------------------
+st.subheader("⚠️ 위험구역 목록")
 
-st.download_button(
-    "📥 CSV 다운로드",
-    data=csv,
-    file_name="safety_map_data.csv",
-    mime="text/csv"
-)
+if st.session_state.danger_zones:
 
-st.info(
-    "예제 데이터 기반 데모 앱입니다. 실제 공공데이터로 교체하여 활용할 수 있습니다."
-)
+    st.dataframe(
+        pd.DataFrame(st.session_state.danger_zones)[["name"]],
+        use_container_width=True
+    )
+
+else:
+    st.info("등록된 위험구역이 없습니다.")
